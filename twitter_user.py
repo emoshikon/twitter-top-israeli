@@ -11,10 +11,12 @@ import json
 import sys
 
 class TwitterUser:
+    VERSION = '0.5'
+    STATUSES_BACK = 20
+    HEBREW_BAR = int(0.3 * STATUSES_BACK)
+    MIN_FOLLOWERS = 2000
     api = None
     logfh = sys.stdout
-    version = '0.5'
-    statuses_back = 20
     def __init__(self, id_str, save_func):
         '''
         Variables:
@@ -25,8 +27,9 @@ class TwitterUser:
             name - full name of this user
             friends_count - the number of people this user is following, as given by the API
             followers_count - the number of people follwing this user
-            total_retweet_count - how many retweets this user achieved in the last $statuses_back
+            total_retweet_count - how many retweets this user achieved in the last $STATUSES_BACK
         Flags:
+            is_tiny - less than $MIN_FOLLOWERS so no worth spending time and capacity
             is_raeli - writes hebrew posts
             is_active - wrote at least 12 posts since 2015
             is_protected - doesn't share tweets publicly
@@ -37,17 +40,21 @@ class TwitterUser:
         self.save_func = save_func
         self.follows = set() #[u.screen_name for u in user_obj.friends()]
         self.total_retweet_count = 0
+        self.is_tiny = False
         self.is_raeli = False
         self.is_active = False
         self.is_protected = False
         user_obj = None
         count_heb = 0
         count_tweets = 0
-        for tweet in self.limit_handled(tweepy.Cursor(self.api.user_timeline, id=id_str).items(self.statuses_back)):
-            if count_heb == 3:
+        for tweet in self.limit_handled(tweepy.Cursor(self.api.user_timeline, id=id_str).items(self.STATUSES_BACK)):
+            if tweet.user.followers_count < self.MIN_FOLLOWERS:
+                self.is_tiny = True
+                break
+            if count_heb == self.HEBREW_BAR:
                 self.is_raeli = True
                 user_obj = tweet.user
-            elif count_heb < 3:
+            elif count_heb < self.HEBREW_BAR:
                 if tweet.lang == 'he':
                     count_heb += 1
                 else:
@@ -152,7 +159,8 @@ if __name__ == '__main__':
         'not_israeli' : None,
         'not_active' : None,
         'protected' : None,
-        'done' : None
+        'done' : None,
+        'tiny' : None
     }
 
     with open('db/tweeters.db','r') as f:
@@ -184,7 +192,11 @@ if __name__ == '__main__':
         if user.is_protected:
             sets['protected'].add(user_id)
             skips.add(user_id)
-            log.write(u" - oh, user's tweets are protected\n")
+            log.write(u" - oh, tweets are protected\n")
+        elif user.is_tiny:
+            sets['tiny'].add(user_id)
+            skips.add(user_id)
+            log.write(u" - neahh, less than %d followers\n" % user.MIN_FOLLOWERS)
         elif not user.is_raeli:
             sets['not_israeli'].add(user_id)
             skips.add(user_id)
