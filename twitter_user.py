@@ -120,6 +120,21 @@ class TwitterUser:
                 raise
 
 if __name__ == '__main__':
+    def save(user_id=None):
+        stored_queue = deque(queue)
+        if user_id:
+            stored_queue.appendleft(user_id)
+        with open('db/tweeters.db','wb') as f:
+            Pickler(f,-1).dump(users)
+        with open('db/queue.db','wb') as f:
+            Pickler(f,-1).dump(stored_queue)
+        with open('db/scores.db','wb') as f:
+            Pickler(f,-1).dump(scores)
+        for s in sets.keys():
+            with io.open('db/%s.list' % s , 'w' , encoding='utf8') as f:
+                f.write(u','.join(sets[s]))
+        log.write(u"\t\tSaved: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d\n" % (len(stored_queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active'])))
+
     BASE_USER_SCREEN_NAME = 'amit_segal'
     BASE_USER_ID = '114894966'
     
@@ -151,21 +166,6 @@ if __name__ == '__main__':
             content = f.read()
             sets[s] = set() if content == '' else set(map(str, content.split(',')))
     skips = sets['protected'] | sets['not_israeli'] | sets['not_active']
-
-    def save(user_id=None):
-        stored_queue = deque(queue)
-        if user_id:
-            stored_queue.appendleft(user_id)
-        with open('db/tweeters.db','wb') as f:
-            Pickler(f,-1).dump(users)
-        with open('db/queue.db','wb') as f:
-            Pickler(f,-1).dump(stored_queue)
-        with open('db/scores.db','wb') as f:
-            Pickler(f,-1).dump(scores)
-        for s in sets.keys():
-            with io.open('db/%s.list' % s , 'w' , encoding='utf8') as f:
-                f.write(u','.join(sets[s]))
-        log.write(u"\t\tSaved: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d\n" % (len(stored_queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active'])))
 
     log.write(u"%s - Started digging into Twitter\n" % (datetime.now()))
     log.write(u"\tLoading: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d\n" % (len(queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active'])))
