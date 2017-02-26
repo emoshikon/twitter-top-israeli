@@ -17,7 +17,7 @@ class TwitterUser:
     MIN_FOLLOWERS = 2000
     api = None
     logfh = sys.stdout
-    def __init__(self, id_str, save_func):
+    def __init__(self, id_str, save_func=None):
         '''
         Variables:
             id_str - Twitter user ID
@@ -40,6 +40,7 @@ class TwitterUser:
         self.save_func = save_func
         self.follows = set() #[u.screen_name for u in user_obj.friends()]
         self.total_retweet_count = 0
+        self.failed = False
         self.is_tiny = False
         self.is_raeli = False
         self.is_active = False
@@ -87,46 +88,56 @@ class TwitterUser:
             try:
                 yield cursor.next()
             except tweepy.RateLimitError:
-                self.logfh.write(u"\n\t\tRate limited so paused user %s\n" % self.id_str)
-                rate = self.api.rate_limit_status()
-                friends_ids = rate['resources']['friends']['/friends/ids']['remaining']
-                user_timeline = rate['resources']['statuses']['/statuses/user_timeline']['remaining']
-                friend_reset = rate['resources']['friends']['/friends/ids']['reset']
-                friend_reset_time = datetime.fromtimestamp(friend_reset)
-                status_reset = rate['resources']['statuses']['/statuses/user_timeline']['reset']
-                status_reset_time = datetime.fromtimestamp(status_reset)
-                self.logfh.write(u"\t\tWaiting for rate limit - /friends/ids=%d (->%s) & /statuses/user_timeline=%d (->%s)\n" % (friends_ids,friend_reset_time.time().isoformat(),user_timeline,status_reset_time.time().isoformat()))
-                self.save_func(self.id_str)
-                self.logfh.write(u"\t\t\tsleeping ")
-                char = u'/'
-                while True:
-                    self.logfh.write(char)
-                    self.logfh.flush()
-                    try:
-                        sleep(60)
-                    except (KeyboardInterrupt, SystemExit):
-                        self.logfh.write(u"\n\t\tAdmin interrupted the script. Trying to save..\n")
-                        self.save_handler(self.id_str)
-                        self.logfh.write(u"%s - Quit digging into Twitter\n" % (datetime.now()))
-                        exit()
-                    if friend_reset_time < datetime.now():
-                        self.logfh.write(u"\n\tResuming ID %s" % self.id_str)
-                        break
-                    char = u'\\' if char == u'/' else u'/'
+                self.handle_pause()
             except tweepy.TweepError as e:
                 if hasattr(e.response, 'status_code'):                    
                     if e.response.status_code == 401:
                         self.is_protected = True
                         break
-                self.logfh.write(u" - Problem with user %s due to %s\n" % (self.id_str,e))
-                break
+                    elif e.response.status_code == 429:
+                        self.handle_pause()
+                else:
+                    self.logfh.write(u" - Problem with user %s due to %s\n" % (self.id_str,e))
+                    self.failed = True
+                    break
             except not tweepy.TweepError as e:
                 self.logfh.write(u"!! SOMETHING HAPPENED: %s\n" % e)
                 self.save_handler(self.id_str)
                 self.logfh.write(u"%s - Unexpectaly quit digging into Twitter\n" % (datetime.now()))
                 raise
 
+    def handle_pause(self):
+        self.logfh.write(u"\n\t\tRate limited so paused user %s\n" % self.id_str)
+        rate = self.api.rate_limit_status()
+        friends_ids = rate['resources']['friends']['/friends/ids']['remaining']
+        user_timeline = rate['resources']['statuses']['/statuses/user_timeline']['remaining']
+        friend_reset = rate['resources']['friends']['/friends/ids']['reset']
+        friend_reset_time = datetime.fromtimestamp(friend_reset)
+        status_reset = rate['resources']['statuses']['/statuses/user_timeline']['reset']
+        status_reset_time = datetime.fromtimestamp(status_reset)
+        self.logfh.write(u"\t\tWaiting for rate limit at %s - /friends/ids=%d (->%s) & /statuses/user_timeline=%d (->%s)\n" % (datetime.now().time().replace(microsecond=0).isoformat(),friends_ids,friend_reset_time.time().isoformat(),user_timeline,status_reset_time.time().isoformat()))
+        self.save_func(self.id_str)
+        self.logfh.write(u"\t\t\tsleeping ")
+        char = u'/'
+        while True:
+            self.logfh.write(char)
+            self.logfh.flush()
+            try:
+                sleep(60)
+            except (KeyboardInterrupt, SystemExit):
+                self.logfh.write(u"\n\t\tAdmin interrupted the script. Trying to save..\n")
+                self.save_handler(self.id_str)
+                self.logfh.write(u"%s - Quit digging into Twitter\n" % (datetime.now()))
+                exit()
+            if friend_reset_time < datetime.now():
+                self.logfh.write(u"\n\tResuming ID %s" % self.id_str)
+                break
+            char = u'\\' if char == u'/' else u'/'
+        return True
+
 if __name__ == '__main__':
+    log = io.open('progress.log', 'a',buffering=1,encoding='utf8')
+    log.write(u"\n%s - Started digging into Twitter\n" % (datetime.now()))
     def save(user_id=None):
         stored_queue = deque(queue)
         if user_id:
@@ -140,7 +151,7 @@ if __name__ == '__main__':
         for s in sets.keys():
             with io.open('db/%s.list' % s , 'w' , encoding='utf8') as f:
                 f.write(u','.join(sets[s]))
-        log.write(u"\t\tSaved: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d\n" % (len(stored_queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active'])))
+        log.write(u"\t\tSaved: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d | Tiny = %d\n" % (len(stored_queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active']),len(sets['tiny'])))
 
     BASE_USER_SCREEN_NAME = 'amit_segal'
     BASE_USER_ID = '114894966'
@@ -150,7 +161,6 @@ if __name__ == '__main__':
     auth = tweepy.OAuthHandler(tokens['consumer_key'], tokens['consumer_secret'])
     auth.set_access_token(tokens['access_token'], tokens['access_token_secret'])
     TwitterUser.api = tweepy.API(auth)
-    log = io.open('progress.log', 'a',buffering=1,encoding='utf8')
     TwitterUser.logfh = log
     users = {}
     queue = deque([BASE_USER_ID])
@@ -173,43 +183,52 @@ if __name__ == '__main__':
         with io.open('db/%s.list' % s , 'r' , encoding='utf8') as f:
             content = f.read()
             sets[s] = set() if content == '' else set(map(str, content.split(',')))
-    skips = sets['protected'] | sets['not_israeli'] | sets['not_active']
+    skips = sets['protected'] | sets['not_israeli'] | sets['not_active'] | sets['tiny']
 
-    log.write(u"%s - Started digging into Twitter\n" % (datetime.now()))
-    log.write(u"\tLoading: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d\n" % (len(queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active'])))
-
-    while True:
+    log.write(u"\tLoading: Queue = %d | Done = %d | Not-Israeli = %d | Not-Active = %d | Tiny = %d\n\t" % (len(queue),len(sets['done']),len(sets['not_israeli']),len(sets['not_active']),len(sets['tiny'])))
+    jumped = False
+    while len(queue):
         user_id = queue.popleft()
         if user_id in skips:
-            log.write(u"\tSkipped %s\n" % user_id)
+            jumped = True
+            log.write(u'-')
+            log.flush()
             continue
         if user_id in sets['done']:
+            jumped = True
             scores[user_id] += 1
-            log.write(u"\tScored %s\n" % users[user_id].screen_name)
+            log.write(u'+')
+            log.flush()
             continue
-        log.write(u"\tPulling ID %s" % user_id)
+        if jumped:
+            log.write(u"\n\t")
+            jumped = False
+        log.write(u"Pulling ID %s" % user_id)
         user = TwitterUser(user_id,save)
-        if user.is_protected:
+        if user.failed:
+            queue.append(user_id)
+        elif user.is_protected:
             sets['protected'].add(user_id)
             skips.add(user_id)
-            log.write(u" - oh, tweets are protected\n")
+            log.write(u" - oh, tweets are protected\n\t")
         elif user.is_tiny:
             sets['tiny'].add(user_id)
             skips.add(user_id)
-            log.write(u" - neahh, less than %d followers\n" % user.MIN_FOLLOWERS)
+            log.write(u" - neahh, less than %d followers\n\t" % user.MIN_FOLLOWERS)
         elif not user.is_raeli:
             sets['not_israeli'].add(user_id)
             skips.add(user_id)
-            log.write(u" - oh, not Israeli!\n")
+            log.write(u" - oh, not Israeli!\n\t")
         elif not user.is_active:
             sets['not_active'].add(user_id)
             skips.add(user_id)
-            log.write(u" - oh, not Active!\n")
+            log.write(u" - oh, not Active!\n\t")
         else:
             users[user_id] = user
             queue.extend(user.follows)
             scores[user_id] = 1
             sets['done'].add(user_id)
-            log.write(u" - It's %s (@%s)\n" % (user.name,user.screen_name))
-
+            log.write(u" - It's %s (@%s)\n\t" % (user.name,user.screen_name))
+    save()
+    log.write(u"%s - Queue is empty, done digging into Twitter\n" % (datetime.now()))
 #https://tweeterid.com/
