@@ -9,12 +9,14 @@ from datetime import datetime
 from time import sleep
 import json
 import sys
+import numpy
 
 class TwitterUser:
     VERSION = '0.5'
     STATUSES_BACK = 20
     HEBREW_BAR = int(0.3 * STATUSES_BACK)
     MIN_FOLLOWERS = 2000
+    FIND_FOLLOWS = True
     api = None
     logfh = sys.stdout
     def __init__(self, id_str, save_func=None):
@@ -40,39 +42,55 @@ class TwitterUser:
         self.save_func = save_func
         self.follows = set() #[u.screen_name for u in user_obj.friends()]
         self.total_retweet_count = 0
+        self.retweets_95p = 0
+        self.total_heb_retweet_count = 0
+        self.heb_retweets_95p = 0
         self.failed = False
         self.is_tiny = False
         self.is_raeli = False
         self.is_active = False
         self.is_protected = False
+        self.count_tweets = 0
+        self.count_heb_tweets = 0
         user_obj = None
-        count_heb = 0
-        count_tweets = 0
-        for tweet in self.limit_handled(tweepy.Cursor(self.api.user_timeline, id=id_str).items(self.STATUSES_BACK)):
+        retweets_list = list()
+        retweets_heb_list = list()
+        for tweet in self.limit_handled(tweepy.Cursor(self.api.user_timeline, id=id_str, include_rts=False, exclude_replies=True, count=200).items()):
             if tweet.user.followers_count < self.MIN_FOLLOWERS:
                 self.is_tiny = True
                 break
-            if count_heb == self.HEBREW_BAR:
+            if self.count_heb_tweets == self.HEBREW_BAR:
                 self.is_raeli = True
                 user_obj = tweet.user
-            elif count_heb < self.HEBREW_BAR:
-                if tweet.lang == 'he':
-                    count_heb += 1
-                else:
-                    if self.contains_hebrew(tweet.text):
-                        count_heb += 1
-            count_tweets += 1
-            if count_tweets == 11: # the 12th tweet need to be less than a year old
+            heb_tweet = False
+            if tweet.lang == 'he':
+                self.count_heb_tweets += 1
+                heb_tweet = True
+            else:
+                if self.contains_hebrew(tweet.text):
+                    self.count_heb_tweets += 1
+                    heb_tweet = True
+            if heb_tweet:
+                self.total_heb_retweet_count += tweet.retweet_count
+                retweets_heb_list.append(tweet.retweet_count)
+            self.count_tweets += 1
+            if self.count_tweets == 11: # the 12th tweet need to be less than a year old
                 if tweet.created_at.year > 2015:
                     self.is_active = True
             self.total_retweet_count += tweet.retweet_count
+            retweets_list.append(tweet.retweet_count)
+            if ((self.count_heb_tweets == self.STATUSES_BACK) | (self.count_tweets > self.STATUSES_BACK + self.HEBREW_BAR)):
+                break
+        self.retweets_95p = numpy.percentile(retweets_list,95)
+        self.retweets_heb_95p = numpy.percentile(retweets_heb_list,95)
         if self.is_raeli & self.is_active:
             self.screen_name = unicode(user_obj.screen_name)
             self.name = unicode(user_obj.name) or ''
             self.followers_count = int(user_obj.followers_count) 
             self.friends_count = int(user_obj.friends_count)
-            for user_id in self.limit_handled(tweepy.Cursor(self.api.friends_ids, id=id_str).items()):
-                self.follows.add(str(user_id))
+            if self.FIND_FOLLOWS:
+                for user_id in self.limit_handled(tweepy.Cursor(self.api.friends_ids, id=id_str).items()):
+                    self.follows.add(str(user_id))
 
     def __repr__(self):
         return (u"Name: %s\nFollowing: %d\nTable: %s" % (self.name,self.friends_count,vars(self))).encode('utf8')
@@ -123,7 +141,7 @@ class TwitterUser:
             self.logfh.write(char)
             self.logfh.flush()
             try:
-                sleep(60)
+                sleep(15)
             except (KeyboardInterrupt, SystemExit):
                 self.logfh.write(u"\n\t\tAdmin interrupted the script. Trying to save..\n")
                 self.save_handler(self.id_str)
